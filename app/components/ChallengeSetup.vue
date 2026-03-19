@@ -92,7 +92,7 @@ function updateName(val: string) {
       <p
         class="text-stone-400 font-black text-[10px] uppercase tracking-[0.2em]"
       >
-        Create a new mission
+        Create a new quest
       </p>
     </div>
 
@@ -102,7 +102,7 @@ function updateName(val: string) {
         <h3
           class="text-sm font-black uppercase tracking-[0.1em] text-stone-900"
         >
-          Mission Photo
+          Quest Photo
         </h3>
         <div
           v-if="modelValue.image"
@@ -135,7 +135,7 @@ function updateName(val: string) {
             <Camera class="w-8 h-8 text-orange-600" />
           </div>
           <span class="text-xs font-black uppercase tracking-widest"
-            >Take Mission Photo</span
+            >Take Quest Photo</span
           >
         </button>
       </div>
@@ -174,13 +174,13 @@ function updateName(val: string) {
         </div>
       </div>
 
-      <!-- Mission Name -->
+      <!-- Quest Name -->
       <div class="space-y-4">
         <div class="flex items-center justify-between">
           <h3
             class="text-sm font-black uppercase tracking-[0.1em] text-stone-900"
           >
-            Mission Name <span class="text-stone-400 ml-1">(Optional)</span>
+            Quest Name <span class="text-stone-400 ml-1">(Optional)</span>
           </h3>
         </div>
         <input
@@ -192,12 +192,12 @@ function updateName(val: string) {
         />
       </div>
 
-      <!-- Mission Tips (Draggable List) -->
+      <!-- Quest Tips (Draggable List) -->
       <div class="space-y-4">
         <h3
           class="text-sm font-black uppercase tracking-[0.1em] text-stone-900"
         >
-          Mission Hints <span class="text-stone-400 ml-1">(Optional)</span>
+          Quest Hints <span class="text-stone-400 ml-1">(Optional)</span>
         </h3>
 
         <!-- Add Tip Input -->
@@ -281,7 +281,7 @@ function updateName(val: string) {
             : 'bg-stone-300 cursor-not-allowed opacity-50 shadow-none',
         ]"
       >
-        <Check class="w-6 h-6" /> Publish Mission
+        <Check class="w-6 h-6" /> Publish Quest
       </button>
     </div>
   </div>

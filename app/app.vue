@@ -16,74 +16,103 @@ import {
   Check,
   X,
   Compass,
+  User,
 } from "lucide-vue-next";
-import { GoogleMap, Circle, Marker } from "vue3-google-map";
+import {
+  GoogleMap,
+  Circle,
+  Marker,
+  MarkerCluster,
+  CustomMarker,
+} from "vue3-google-map";
 import { useLocalStorage, useGeolocation } from "@vueuse/core";
 
 const config = useRuntimeConfig();
 const googleMapsApiKey = config.public.googleMapsApiKey;
 
-type View = "home" | "create" | "match" | "result" | "map" | "details";
+type View =
+  | "home"
+  | "create"
+  | "match"
+  | "result"
+  | "map"
+  | "details"
+  | "profile";
 const currentView = ref<View>("home");
 
-const defaultHunts = [
-  {
-    id: "1",
-    image:
-      "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&q=80&w=800",
-    location: "Golden Gate Park",
-    position: { lat: 37.7694, lng: -122.4862 },
-    difficulty: 3,
-    solves: 124,
-    tips: [
-      "Line up the bench in the foreground",
-      "Use the tall cypress tree as a vertical anchor",
-    ],
-  },
-  {
-    id: "2",
-    image:
-      "https://images.unsplash.com/photo-1493397212122-2b85def82820?auto=format&fit=crop&q=80&w=800",
-    location: "Modern Museum",
-    position: { lat: 37.7857, lng: -122.4011 },
-    difficulty: 5,
-    solves: 42,
-    tips: [
-      "Stand exactly 10 feet from the glass",
-      "Ensure the architectural lines are perfectly parallel",
-    ],
-  },
-  {
-    id: "3",
-    image:
-      "https://images.unsplash.com/photo-1449156059431-789995fd169b?auto=format&fit=crop&q=80&w=800",
-    location: "Old Library",
-    position: { lat: 37.7801, lng: -122.4632 },
-    difficulty: 2,
-    solves: 312,
-    tips: [
-      "Center the clock tower",
-      "Wait for the shadows to align with the columns",
-    ],
-  },
-];
-
 const customHunts = useLocalStorage<any[]>("lenshunt_custom_hunts", []);
-const hunts = computed(() => [...customHunts.value, ...defaultHunts]);
+const completedHunts = useLocalStorage<string[]>(
+  "lenshunt_completed_hunts",
+  [],
+);
+const allHunts = computed(() => {
+  const all = [...customHunts.value].filter((h) => h && h.id && h.position);
+  const uniqueHunts: any[] = [];
+  const seenIds = new Set();
+  const seenPositions = new Set();
+
+  for (const h of all) {
+    const posKey = `${h.position.lat.toFixed(6)},${h.position.lng.toFixed(6)}`;
+    if (!seenIds.has(h.id) && !seenPositions.has(posKey)) {
+      seenIds.add(h.id);
+      seenPositions.add(posKey);
+      uniqueHunts.push(h);
+    }
+  }
+  return uniqueHunts;
+});
+
+const hunts = computed(() => {
+  return allHunts.value.filter((h) => !completedHunts.value.includes(h.id));
+});
 
 const totalXp = useLocalStorage("lenshunt_total_xp", 0);
+const totalStars = useLocalStorage("lenshunt_total_stars", 0);
 const explorerLevel = computed(() => Math.floor(totalXp.value / 500) + 1);
 const xpToNextLevel = computed(() => 500 - (totalXp.value % 500));
 
 const activeHunt = ref<any>(null);
+const detailsSubView = ref<"details" | "location" | "photo">("details");
+const profileSubView = ref<"completed" | "posted">("completed");
 const onionOpacity = ref(0.4);
 const isLocating = ref(false);
+
+function getDistance(
+  p1: { lat: number; lng: number },
+  p2: { lat: number; lng: number },
+) {
+  const R = 6371e3; // Earth radius in meters
+  const dLat = (p2.lat - p1.lat) * (Math.PI / 180);
+  const dLng = (p2.lng - p1.lng) * (Math.PI / 180);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(p1.lat * (Math.PI / 180)) *
+      Math.cos(p2.lat * (Math.PI / 180)) *
+      Math.sin(dLng / 2) *
+      Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+const openGlobalMap = () => {
+  activeHunt.value = null;
+  currentView.value = "map";
+};
+
+const viewHuntOnMap = () => {
+  detailsSubView.value = "location";
+  currentView.value = "details";
+};
 
 const lastAttempt = reactive({
   image: "",
   score: 0,
   explanation: "",
   loading: false,
+  distance: null as number | null,
+  isSuccess: false,
+  starsEarned: 0,
+  xpEarned: 0,
 });
 
 const createStep = ref<"setup" | "capture">("setup");
@@ -103,8 +132,48 @@ const userPosition = computed(() => {
   return null;
 });
 
-const mapCenter = ref({ lat: 37.7749, lng: -122.4194 });
+const mapCenter = ref({ lat: 55.7042, lng: 12.5771 });
+const mapZoom = ref(13);
 const mapRef = ref<any>(null);
+const isMapReady = ref(false);
+
+const clusterOptions = computed(() => {
+  if (
+    typeof window === "undefined" ||
+    !(window as any).google ||
+    !(window as any).google.maps
+  )
+    return null;
+
+  return {
+    renderer: {
+      render: ({ count, position }: any) => {
+        const google = (window as any).google;
+        return new google.maps.Marker({
+          position,
+          icon: {
+            path: google.maps.SymbolPath.CIRCLE,
+            fillColor: "#ea580c",
+            fillOpacity: 1,
+            strokeColor: "#ffffff",
+            strokeWeight: 2,
+            scale: 18,
+            anchor: new google.maps.Point(0, 0),
+            labelOrigin: new google.maps.Point(0, 0),
+          },
+          label: {
+            text: String(count),
+            color: "#ffffff",
+            fontSize: "12px",
+            fontWeight: "900",
+            fontFamily: "Inter, sans-serif",
+          },
+          zIndex: 99999 + count,
+        });
+      },
+    },
+  };
+});
 
 function triggerHaptic(pattern: number | number[] = 10) {
   if (typeof navigator !== "undefined" && navigator.vibrate) {
@@ -122,6 +191,7 @@ function startMatch(hunt: any) {
       "Look for distinct landmarks",
     ],
   };
+  detailsSubView.value = "details";
   currentView.value = "details";
 }
 
@@ -135,7 +205,17 @@ async function handleCapture(imageData: string) {
 
   lastAttempt.image = imageData;
   lastAttempt.loading = true;
+  lastAttempt.isSuccess = false;
+  lastAttempt.distance = null;
   currentView.value = "result";
+
+  // Calculate distance
+  if (userPosition.value && activeHunt.value) {
+    lastAttempt.distance = getDistance(
+      userPosition.value,
+      activeHunt.value.position,
+    );
+  }
 
   try {
     const data = await $fetch("/api/compare", {
@@ -149,9 +229,38 @@ async function handleCapture(imageData: string) {
     if (data) {
       lastAttempt.score = (data as any).score;
       lastAttempt.explanation = (data as any).explanation;
-      const earnedXp = Math.round((data as any).score);
-      totalXp.value += earnedXp;
-      triggerHaptic([30, 50, 30]);
+
+      // Success criteria: > 75% match AND (distance <= 10m OR GPS unavailable)
+      const withinDistance =
+        lastAttempt.distance === null || lastAttempt.distance <= 10;
+
+      if (lastAttempt.score >= 75 && withinDistance) {
+        lastAttempt.isSuccess = true;
+
+        // Calculate stars (1-3)
+        if (lastAttempt.score >= 95) lastAttempt.starsEarned = 3;
+        else if (lastAttempt.score >= 85) lastAttempt.starsEarned = 2;
+        else lastAttempt.starsEarned = 1;
+
+        // Calculate XP: Base score + bonus for precision
+        const bonusXp = Math.round(Math.max(0, (lastAttempt.score - 75) * 5));
+        lastAttempt.xpEarned = Math.round(lastAttempt.score + bonusXp);
+
+        if (
+          activeHunt.value &&
+          !completedHunts.value.includes(activeHunt.value.id)
+        ) {
+          completedHunts.value.push(activeHunt.value.id);
+          totalStars.value += lastAttempt.starsEarned;
+        }
+      } else {
+        lastAttempt.isSuccess = false;
+        lastAttempt.starsEarned = 0;
+        lastAttempt.xpEarned = Math.round(lastAttempt.score / 2); // Consolation XP
+      }
+
+      totalXp.value += lastAttempt.xpEarned;
+      triggerHaptic(lastAttempt.isSuccess ? [30, 50, 30] : 10);
     }
   } catch (e) {
     console.error("API Error:", e);
@@ -168,13 +277,16 @@ function finalizeCreateHunt() {
   const userTips =
     newHuntData.value.tips.length > 0
       ? newHuntData.value.tips.map((t) => t.text)
-      : ["Identify the primary structural lines", "Check for foreground alignment"];
+      : [
+          "Identify the primary structural lines",
+          "Check for foreground alignment",
+        ];
 
   const newHunt = {
     id: Date.now().toString(),
     image: newHuntData.value.image,
     location:
-      newHuntData.value.locationName || "Mission #" + (hunts.value.length + 1),
+      newHuntData.value.locationName || "Quest #" + (hunts.value.length + 1),
     position: position,
     difficulty: newHuntData.value.difficulty,
     radius: newHuntData.value.radius,
@@ -221,8 +333,32 @@ onMounted(() => {
 
 const centerMap = () => {
   if (userPosition.value && mapRef.value?.map) {
-    mapRef.value.map.setCenter(userPosition.value);
-    mapRef.value.map.setZoom(17);
+    const map = mapRef.value.map;
+    const projection = map.getProjection();
+    if (!projection) {
+      map.setCenter(userPosition.value);
+      map.setZoom(17);
+      return;
+    }
+
+    // Calculate vertical offset to center user in the visible area above the drawer
+    // Drawer is ~28% or ~72% of height depending on view
+    const drawerHeightRatio = currentView.value === "home" ? 0.72 : 0.28;
+    const visibleHeightRatio = 1 - drawerHeightRatio;
+
+    // We want the user to be at (visibleHeightRatio / 2) from the top
+    // Standard center is 0.5. Offset = 0.5 - (visibleHeightRatio / 2)
+    const offsetRatio = 0.5 - visibleHeightRatio / 2;
+
+    map.setCenter(userPosition.value);
+    map.setZoom(17);
+
+    // Slight delay to allow zoom to finish before panning for offset
+    setTimeout(() => {
+      map.panBy(0, Math.round(window.innerHeight * offsetRatio));
+    }, 100);
+  } else {
+    currentView.value = "map";
   }
 };
 </script>
@@ -247,20 +383,15 @@ const centerMap = () => {
               <Compass class="w-5 h-5 text-white" />
             </div>
             <h1 class="text-xl font-extrabold text-stone-900 tracking-tight">
-              LensHunt<span class="text-orange-600">AI</span>
+              SnapQuest
             </h1>
           </div>
-          <div class="mt-2 ml-9 flex flex-col gap-1">
+          <div class="mt-2 flex flex-col gap-1">
             <div class="flex items-center justify-between gap-4">
               <p
                 class="text-[8px] uppercase tracking-[0.2em] text-stone-400 font-black"
               >
                 Level {{ explorerLevel }} Explorer
-              </p>
-              <p
-                class="text-[8px] font-bold text-orange-600 uppercase tracking-widest"
-              >
-                {{ xpToNextLevel }} XP to Rank Up
               </p>
             </div>
             <div class="w-full h-1 bg-stone-100 rounded-full overflow-hidden">
@@ -274,12 +405,19 @@ const centerMap = () => {
 
         <div class="flex flex-col space-y-2 pointer-events-auto">
           <button
-            @click="currentView === 'map' ? centerMap() : (currentView = 'map')"
+            @click="centerMap"
             class="bg-white p-3.5 rounded-2xl shadow-xl shadow-orange-900/5 text-orange-600 hover:bg-orange-50 transition-all hover:scale-105 active:scale-95 border border-stone-100"
-            title="Map View"
+            title="Center on Me"
           >
-            <MapPin v-if="currentView !== 'map'" class="w-6 h-6" />
-            <Navigation v-else class="w-6 h-6" />
+            <Navigation class="w-6 h-6" />
+          </button>
+
+          <button
+            @click="currentView = 'profile'"
+            class="bg-white p-3.5 rounded-2xl shadow-xl shadow-orange-900/5 text-orange-600 hover:bg-orange-50 transition-all hover:scale-105 active:scale-95 border border-stone-100"
+            title="My Profile"
+          >
+            <User class="w-6 h-6" />
           </button>
           <button
             @click="currentView = 'create'"
@@ -301,65 +439,74 @@ const centerMap = () => {
           :api-key="googleMapsApiKey"
           class="w-full h-full"
           :center="mapCenter"
-          :zoom="13"
+          v-model:zoom="mapZoom"
           :disable-default-ui="true"
           :styles="mapStyles"
+          @idle="isMapReady = true"
         >
-          <template v-for="hunt in hunts" :key="hunt.id">
+          <!-- Individual Quest Circles (Stay visible as radius indicators) -->
+          <template v-for="hunt in hunts" :key="'circle-' + hunt.id">
             <Circle
+              v-if="
+                currentView === 'map' ||
+                (activeHunt?.id === hunt.id && currentView === 'details')
+              "
               :options="{
                 center: hunt.position,
                 radius: hunt.radius || 180,
                 fillColor: '#ea580c',
-                fillOpacity: 0.12,
+                fillOpacity: activeHunt?.id === hunt.id ? 0.25 : 0.12,
                 strokeColor: '#ea580c',
-                strokeOpacity: 0.5,
-                strokeWeight: 2,
+                strokeOpacity: 0.4,
+                strokeWeight: 1.5,
               }"
-            />
-            <Marker
-              :options="{
-                position: hunt.position,
-                icon: {
-                  path: 'M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z',
-                  fillColor: '#ea580c',
-                  fillOpacity: 1,
-                  strokeWeight: 2,
-                  strokeColor: '#ffffff',
-                  scale: 1.3,
-                  anchor: { x: 12, y: 22 },
-                },
-              }"
-              @click="startMatch(hunt)"
             />
           </template>
-          <Marker
+
+          <!-- Marker Clustering for Quests -->
+          <MarkerCluster v-if="isMapReady" :options="clusterOptions || {}">
+            <CustomMarker
+              v-for="hunt in hunts"
+              :key="'marker-' + hunt.id"
+              :options="{
+                position: hunt.position,
+                anchorPoint: 'CENTER',
+              }"
+              @click="startMatch(hunt)"
+            >
+              <div class="w-0 h-0 opacity-0"></div>
+            </CustomMarker>
+          </MarkerCluster>
+
+          <CustomMarker
             v-if="userPosition"
             :options="{
               position: userPosition,
-              zIndex: 999,
-              icon: {
-                path: 'M12 12m-8 0a8 8 0 1 0 16 0a8 8 0 1 0 -16 0',
-                fillColor: '#ea580c',
-                fillOpacity: 1,
-                strokeColor: '#ffffff',
-                strokeWeight: 3,
-                scale: 0.9,
-                anchor: { x: 12, y: 12 },
-              },
+              anchorPoint: 'CENTER',
+              zIndex: 10,
             }"
-          />
+          >
+            <div class="relative w-6 h-6 flex items-center justify-center">
+              <div
+                class="absolute inset-0 bg-orange-600/30 rounded-full animate-ping"
+              ></div>
+              <div
+                class="relative w-4 h-4 bg-orange-600 rounded-full border-2 border-white shadow-lg"
+              ></div>
+            </div>
+          </CustomMarker>
         </GoogleMap>
       </ClientOnly>
 
       <div
         v-if="currentView === 'home' || currentView === 'map'"
         class="absolute inset-x-0 bottom-0 z-10 transition-all duration-500 cubic-bezier(0.16, 1, 0.3, 1) pointer-events-none"
-        :class="currentView === 'home' ? 'h-[72svh]' : 'h-[24svh]'"
+        :class="currentView === 'home' ? 'h-[72svh]' : 'h-[28svh]'"
       >
         <div
           class="h-full w-full bg-white rounded-t-[44px] shadow-[0_-12px_50px_rgba(43,26,10,0.12)] border-t border-stone-100 flex flex-col pointer-events-auto overflow-hidden"
         >
+          <!-- Home List Header -->
           <div
             class="w-full h-10 flex items-center justify-center cursor-pointer active:bg-stone-50 transition-colors"
             @click="currentView = currentView === 'home' ? 'map' : 'home'"
@@ -370,7 +517,7 @@ const centerMap = () => {
             <div class="flex items-center justify-between mb-8 pt-2">
               <div>
                 <h2 class="text-3xl font-black text-stone-900 tracking-tight">
-                  Active Hunts
+                  Active Quests
                 </h2>
                 <p
                   class="text-[10px] uppercase tracking-[0.25em] text-orange-600 font-black"
@@ -400,10 +547,12 @@ const centerMap = () => {
                   <div
                     class="absolute inset-0 bg-gradient-to-t from-stone-900/80 via-stone-900/20 to-transparent"
                   ></div>
-                  
+
                   <!-- Top Difficulty Badge -->
                   <div class="absolute top-4 left-4">
-                    <div class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-600 rounded-full text-white font-black text-[9px] uppercase tracking-widest shadow-lg shadow-orange-900/20">
+                    <div
+                      class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-600 rounded-full text-white font-black text-[9px] uppercase tracking-widest shadow-lg shadow-orange-900/20"
+                    >
                       <Star class="w-3 h-3 fill-current" />
                       Level {{ hunt.difficulty }}
                     </div>
@@ -452,7 +601,7 @@ const centerMap = () => {
               createStep = 'setup';
             }
           "
-          class="absolute top-4 right-4 p-2 text-stone-400 hover:text-stone-900 transition-all z-[110]"
+          class="absolute top-4 right-4 p-2 text-white mix-blend-difference transition-all z-[110]"
         >
           <X class="w-8 h-8" />
         </button>
@@ -462,12 +611,14 @@ const centerMap = () => {
           v-if="currentView === 'details'"
           class="flex-1 flex flex-col overflow-y-auto no-scrollbar pb-32"
         >
-          <div class="relative w-full aspect-[4/5] shrink-0">
+          <div class="relative w-full h-[35svh] shrink-0">
             <img :src="activeHunt?.image" class="w-full h-full object-cover" />
             <div
-              class="absolute inset-0 bg-gradient-to-t from-stone-50 via-stone-50/20 to-transparent"
+              class="absolute inset-0 bg-gradient-to-t from-stone-50 from-0% via-stone-50/95 via-10% to-transparent"
             ></div>
-            <div class="absolute bottom-10 left-8 right-8">
+          </div>
+          <div class="px-8 pt-6 space-y-10">
+            <div>
               <div
                 class="inline-flex items-center gap-2 px-3 py-1 bg-orange-600 rounded-full text-white font-black text-[10px] uppercase tracking-widest mb-3"
               >
@@ -478,71 +629,190 @@ const centerMap = () => {
                 {{ activeHunt?.location }}
               </h2>
             </div>
-          </div>
-          <div class="px-8 pt-8 space-y-10">
-            <div class="flex items-center justify-between">
-              <div class="space-y-1">
-                <p
-                  class="text-[10px] uppercase tracking-[0.2em] text-stone-400 font-black"
-                >
-                  Community Solves
-                </p>
-                <div class="flex items-center gap-2">
-                  <div class="flex -space-x-2">
-                    <div
-                      v-for="i in 3"
-                      :key="i"
-                      class="w-6 h-6 rounded-full border-2 border-white bg-stone-200"
-                    ></div>
-                  </div>
-                  <p class="text-sm font-bold text-stone-600">
-                    +{{ activeHunt?.solves }} matched
+
+            <!-- View Toggle -->
+            <div class="flex bg-stone-100 p-1 rounded-2xl w-fit mx-auto mb-2">
+              <button
+                @click="detailsSubView = 'details'"
+                :class="[
+                  'px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all',
+                  detailsSubView === 'details'
+                    ? 'bg-white text-stone-900 shadow-sm'
+                    : 'text-stone-400 hover:text-stone-600',
+                ]"
+              >
+                Details
+              </button>
+              <button
+                @click="detailsSubView = 'location'"
+                :class="[
+                  'px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all',
+                  detailsSubView === 'location'
+                    ? 'bg-white text-stone-900 shadow-sm'
+                    : 'text-stone-400 hover:text-stone-600',
+                ]"
+              >
+                Location
+              </button>
+              <button
+                @click="detailsSubView = 'photo'"
+                :class="[
+                  'px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all',
+                  detailsSubView === 'photo'
+                    ? 'bg-white text-stone-900 shadow-sm'
+                    : 'text-stone-400 hover:text-stone-600',
+                ]"
+              >
+                Photo
+              </button>
+            </div>
+
+            <template v-if="detailsSubView === 'details'">
+              <div class="flex items-center justify-between">
+                <div class="space-y-1">
+                  <p
+                    class="text-[10px] uppercase tracking-[0.2em] text-stone-400 font-black"
+                  >
+                    Community Solves
                   </p>
+                  <div class="flex items-center gap-2">
+                    <div class="flex -space-x-2">
+                      <div
+                        v-for="i in 3"
+                        :key="i"
+                        class="w-6 h-6 rounded-full border-2 border-white bg-stone-200"
+                      ></div>
+                    </div>
+                    <p class="text-sm font-bold text-stone-600">
+                      +{{ activeHunt?.solves }} matched
+                    </p>
+                  </div>
+                </div>
+                <div class="text-right space-y-1">
+                  <p
+                    class="text-[10px] uppercase tracking-[0.2em] text-stone-400 font-black"
+                  >
+                    Difficulty
+                  </p>
+                  <div class="flex gap-0.5">
+                    <Star
+                      v-for="i in 5"
+                      :key="i"
+                      class="w-4 h-4"
+                      :class="
+                        i <= (activeHunt?.difficulty || 0)
+                          ? 'text-orange-500 fill-current'
+                          : 'text-stone-200'
+                      "
+                    />
+                  </div>
                 </div>
               </div>
-              <div class="text-right space-y-1">
-                <p
-                  class="text-[10px] uppercase tracking-[0.2em] text-stone-400 font-black"
+              <div class="space-y-4">
+                <h3
+                  class="text-sm font-black uppercase tracking-[0.1em] text-stone-900"
                 >
-                  Difficulty
-                </p>
-                <div class="flex gap-0.5">
-                  <Star
-                    v-for="i in 5"
-                    :key="i"
-                    class="w-4 h-4"
-                    :class="
-                      i <= (activeHunt?.difficulty || 0)
-                        ? 'text-orange-500 fill-current'
-                        : 'text-stone-200'
-                    "
+                  Quest Intelligence
+                </h3>
+                <div class="grid gap-3">
+                  <div
+                    v-for="(tip, idx) in activeHunt?.tips"
+                    :key="idx"
+                    class="flex gap-4 p-4 bg-white rounded-3xl border border-stone-100 shadow-sm shadow-orange-900/5"
+                  >
+                    <div
+                      class="w-6 h-6 rounded-full bg-orange-50 flex items-center justify-center text-orange-600 font-black text-[10px] shrink-0"
+                    >
+                      {{ idx + 1 }}
+                    </div>
+                    <p
+                      class="text-sm text-stone-600 font-medium leading-relaxed"
+                    >
+                      {{ tip }}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <template v-else-if="detailsSubView === 'location'">
+              <div class="space-y-6">
+                <h3
+                  class="text-sm font-black uppercase tracking-[0.1em] text-stone-900"
+                >
+                  Search Radius
+                </h3>
+                <div
+                  class="relative aspect-square rounded-[32px] overflow-hidden border-4 border-white shadow-xl shadow-orange-900/5 bg-stone-100"
+                >
+                  <ClientOnly>
+                    <GoogleMap
+                      v-if="googleMapsApiKey"
+                      :api-key="googleMapsApiKey"
+                      class="w-full h-full"
+                      :center="activeHunt?.position"
+                      :zoom="16"
+                      :disable-default-ui="true"
+                      :styles="mapStyles"
+                    >
+                      <Circle
+                        :options="{
+                          center: activeHunt?.position,
+                          radius: activeHunt?.radius || 180,
+                          fillColor: '#ea580c',
+                          fillOpacity: 0.12,
+                          strokeColor: '#ea580c',
+                          strokeOpacity: 0.5,
+                          strokeWeight: 2,
+                        }"
+                      />
+                      <CustomMarker
+                        v-if="userPosition"
+                        :options="{
+                          position: userPosition,
+                          anchorPoint: 'CENTER',
+                          zIndex: 1,
+                        }"
+                      >
+                        <div
+                          class="relative w-6 h-6 flex items-center justify-center"
+                        >
+                          <div
+                            class="absolute inset-0 bg-orange-600/30 rounded-full animate-ping"
+                          ></div>
+                          <div
+                            class="relative w-4 h-4 bg-orange-600 rounded-full border-2 border-white shadow-lg"
+                          ></div>
+                        </div>
+                      </CustomMarker>
+                    </GoogleMap>
+                  </ClientOnly>
+                </div>
+              </div>
+            </template>
+
+            <template v-else-if="detailsSubView === 'photo'">
+              <div class="space-y-6">
+                <h3
+                  class="text-sm font-black uppercase tracking-[0.1em] text-stone-900"
+                >
+                  Target Visual
+                </h3>
+                <div
+                  class="relative aspect-square rounded-[32px] overflow-hidden border-4 border-white shadow-xl shadow-orange-900/5"
+                >
+                  <img
+                    :src="activeHunt?.image"
+                    class="w-full h-full object-cover"
                   />
                 </div>
-              </div>
-            </div>
-            <div class="space-y-4">
-              <h3
-                class="text-sm font-black uppercase tracking-[0.1em] text-stone-900"
-              >
-                Mission Intelligence
-              </h3>
-              <div class="grid gap-3">
-                <div
-                  v-for="(tip, idx) in activeHunt?.tips"
-                  :key="idx"
-                  class="flex gap-4 p-4 bg-white rounded-3xl border border-stone-100 shadow-sm shadow-orange-900/5"
+                <p
+                  class="text-[10px] font-black text-stone-400 text-center uppercase tracking-[0.2em]"
                 >
-                  <div
-                    class="w-6 h-6 rounded-full bg-orange-50 flex items-center justify-center text-orange-600 font-black text-[10px] shrink-0"
-                  >
-                    {{ idx + 1 }}
-                  </div>
-                  <p class="text-sm text-stone-600 font-medium leading-relaxed">
-                    {{ tip }}
-                  </p>
-                </div>
+                  Study the details to match the shot
+                </p>
               </div>
-            </div>
+            </template>
           </div>
           <div
             class="fixed bottom-0 inset-x-0 p-8 bg-gradient-to-t from-stone-50 via-stone-50 to-transparent z-20"
@@ -556,73 +826,359 @@ const centerMap = () => {
           </div>
         </div>
 
+        <!-- Profile View -->
+        <div
+          v-else-if="currentView === 'profile'"
+          class="flex-1 flex flex-col overflow-y-auto no-scrollbar p-8 pt-24 pb-32"
+        >
+          <!-- User Stats Card -->
+          <div
+            class="bg-white rounded-[40px] p-8 border border-stone-100 shadow-xl shadow-orange-900/5 text-center space-y-8 mb-10 shrink-0 relative overflow-hidden"
+          >
+            <div class="absolute top-0 right-0 p-6 opacity-[0.03]">
+              <Trophy class="w-32 h-32 text-orange-600" />
+            </div>
+
+            <div class="relative space-y-4">
+              <div class="relative w-28 h-28 mx-auto">
+                <div
+                  class="absolute inset-0 bg-orange-600 rounded-full animate-pulse opacity-10"
+                ></div>
+                <div
+                  class="relative w-28 h-28 bg-stone-900 rounded-full border-4 border-white shadow-2xl flex items-center justify-center text-white text-4xl font-black italic tracking-tighter"
+                >
+                  {{ explorerLevel }}
+                </div>
+                <div
+                  class="absolute -bottom-2 -right-2 bg-orange-600 text-white px-3 py-1 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg border-2 border-white"
+                >
+                  Rank
+                </div>
+              </div>
+              <div class="space-y-1">
+                <h2 class="text-2xl font-black text-stone-900 tracking-tight">
+                  Master Explorer
+                </h2>
+                <p
+                  class="text-stone-400 font-black text-[10px] uppercase tracking-[0.25em]"
+                >
+                  Global Contributor
+                </p>
+              </div>
+            </div>
+
+            <!-- XP Progress -->
+            <div class="space-y-3">
+              <div class="flex justify-between items-end px-1">
+                <p
+                  class="text-[10px] font-black text-stone-400 uppercase tracking-widest"
+                >
+                  Level Progress
+                </p>
+                <p
+                  class="text-[10px] font-black text-orange-600 uppercase tracking-widest"
+                >
+                  {{ totalXp % 500 }} / 500 XP
+                </p>
+              </div>
+              <div
+                class="w-full h-3 bg-stone-100 rounded-full overflow-hidden border border-stone-50 shadow-inner p-0.5"
+              >
+                <div
+                  class="h-full bg-gradient-to-r from-orange-500 to-orange-600 rounded-full transition-all duration-1000 shadow-sm"
+                  :style="{ width: `${(totalXp % 500) / 5}%` }"
+                ></div>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-3 gap-3">
+              <div
+                class="bg-orange-50/50 rounded-3xl p-4 border border-orange-100/50"
+              >
+                <p
+                  class="text-[8px] font-black text-orange-600/60 uppercase tracking-widest mb-1"
+                >
+                  Quests
+                </p>
+                <p class="text-xl font-black text-stone-900 tracking-tighter">
+                  {{ completedHunts.length }}
+                </p>
+              </div>
+              <div
+                class="bg-amber-50/50 rounded-3xl p-4 border border-amber-100/50"
+              >
+                <p
+                  class="text-[8px] font-black text-amber-600/60 uppercase tracking-widest mb-1"
+                >
+                  Stars
+                </p>
+                <div class="flex items-center justify-center gap-1">
+                  <Star class="w-3 h-3 text-amber-500 fill-current" />
+                  <p class="text-xl font-black text-stone-900 tracking-tighter">
+                    {{ totalStars }}
+                  </p>
+                </div>
+              </div>
+              <div class="bg-stone-50 rounded-3xl p-4 border border-stone-100">
+                <p
+                  class="text-[8px] font-black text-stone-400 uppercase tracking-widest mb-1"
+                >
+                  Total XP
+                </p>
+                <p class="text-xl font-black text-stone-900 tracking-tighter">
+                  {{ totalXp }}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Profile Tabs Toggle -->
+          <div class="flex bg-stone-100 p-1 rounded-2xl w-full mb-10 shrink-0">
+            <button
+              @click="profileSubView = 'completed'"
+              :class="[
+                'flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all',
+                profileSubView === 'completed'
+                  ? 'bg-white text-stone-900 shadow-sm'
+                  : 'text-stone-400 hover:text-stone-600',
+              ]"
+            >
+              Completed
+            </button>
+            <button
+              @click="profileSubView = 'posted'"
+              :class="[
+                'flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all',
+                profileSubView === 'posted'
+                  ? 'bg-white text-stone-900 shadow-sm'
+                  : 'text-stone-400 hover:text-stone-600',
+              ]"
+            >
+              Contributions
+            </button>
+          </div>
+
+          <!-- Hall of Fame (Completed) -->
+          <template v-if="profileSubView === 'completed'">
+            <div class="space-y-6">
+              <h3
+                class="text-sm font-black uppercase tracking-[0.1em] text-stone-900 px-2 flex items-center justify-between"
+              >
+                Hall of Fame
+                <span class="text-[10px] text-stone-400 normal-case"
+                  >{{ completedHunts.length }} matched</span
+                >
+              </h3>
+
+              <div v-if="completedHunts.length > 0" class="grid gap-4">
+                <div
+                  v-for="hunt in allHunts.filter((h) =>
+                    completedHunts.includes(h.id),
+                  )"
+                  :key="'completed-' + hunt.id"
+                  @click="startMatch(hunt)"
+                  class="group relative h-32 rounded-[28px] overflow-hidden shadow-sm border border-stone-100 cursor-pointer active:scale-[0.98] transition-transform"
+                >
+                  <img :src="hunt.image" class="w-full h-full object-cover" />
+                  <div
+                    class="absolute inset-0 bg-gradient-to-t from-stone-900/80 via-transparent to-transparent"
+                  ></div>
+                  <div
+                    class="absolute bottom-4 left-5 right-5 flex items-center justify-between"
+                  >
+                    <div>
+                      <p class="text-white font-black text-base tracking-tight">
+                        {{ hunt.location }}
+                      </p>
+                      <div class="flex items-center gap-1.5 mt-0.5">
+                        <Check class="w-2.5 h-2.5 text-green-400" />
+                        <span
+                          class="text-[8px] font-bold text-white/80 uppercase tracking-widest"
+                          >Verified Match</span
+                        >
+                      </div>
+                    </div>
+                    <div
+                      class="bg-green-500/20 backdrop-blur-md p-1.5 rounded-lg border border-white/20"
+                    >
+                      <Trophy class="w-3.5 h-3.5 text-white" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div
+                v-else
+                class="p-10 bg-stone-50 rounded-[32px] border-2 border-dashed border-stone-200 text-center"
+              >
+                <p
+                  class="text-[10px] font-black text-stone-400 uppercase tracking-widest"
+                >
+                  No successful matches yet
+                </p>
+              </div>
+            </div>
+          </template>
+
+          <!-- My Posted Quests (Contributions) -->
+          <template v-else-if="profileSubView === 'posted'">
+            <div class="space-y-6">
+              <h3
+                class="text-sm font-black uppercase tracking-[0.1em] text-stone-900 px-2 flex items-center justify-between"
+              >
+                Your Contributions
+                <span class="text-[10px] text-stone-400 normal-case"
+                  >{{ customHunts.length }} posted</span
+                >
+              </h3>
+
+              <div v-if="customHunts.length > 0" class="grid gap-4">
+                <div
+                  v-for="hunt in customHunts"
+                  :key="'posted-' + hunt.id"
+                  @click="startMatch(hunt)"
+                  class="group bg-white rounded-[28px] overflow-hidden border border-stone-100 shadow-sm flex cursor-pointer active:scale-[0.98] transition-transform"
+                >
+                  <div class="w-20 h-20 shrink-0 overflow-hidden">
+                    <img :src="hunt.image" class="w-full h-full object-cover" />
+                  </div>
+                  <div class="flex-1 p-4 flex flex-col justify-center">
+                    <p class="font-black text-stone-900 text-sm tracking-tight">
+                      {{ hunt.location }}
+                    </p>
+                    <p
+                      class="text-[9px] font-bold text-stone-400 uppercase tracking-widest mt-1"
+                    >
+                      Level {{ hunt.difficulty }} Quest
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div
+                v-else
+                class="p-10 bg-stone-50 rounded-[32px] border-2 border-dashed border-stone-200 text-center"
+              >
+                <p
+                  class="text-[10px] font-black text-stone-400 uppercase tracking-widest"
+                >
+                  No Quests Posted Yet
+                </p>
+              </div>
+            </div>
+          </template>
+        </div>
+
         <!-- Step 2: Minimalist Match View -->
-        <div v-else-if="currentView === 'match'" class="flex-1 flex flex-col bg-stone-50 overflow-hidden touch-none">
+        <div
+          v-else-if="currentView === 'match'"
+          class="flex-1 flex flex-col bg-stone-50 overflow-hidden touch-none"
+        >
           <div class="flex-1 relative flex flex-col h-full overflow-hidden">
-            <CameraInput :overlay-image="activeHunt?.image" :onion-opacity="onionOpacity" @capture="handleCapture">
+            <CameraInput
+              :overlay-image="activeHunt?.image"
+              :onion-opacity="onionOpacity"
+              @capture="handleCapture"
+            >
               <template #controls>
                 <div class="w-full flex items-center gap-4 px-2">
-                  <span class="text-[9px] font-black text-stone-400 uppercase tracking-widest whitespace-nowrap">Onion</span>
+                  <span
+                    class="text-[9px] font-black text-stone-400 uppercase tracking-widest whitespace-nowrap"
+                    >Onion</span
+                  >
                   <div class="relative flex-1 h-1 flex items-center">
-                    <input type="range" min="0" max="1" step="0.1" v-model.number="onionOpacity" class="w-full accent-orange-500 h-0.5 bg-stone-300 rounded-full appearance-none cursor-pointer relative z-10" />
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.1"
+                      v-model.number="onionOpacity"
+                      class="w-full accent-orange-500 h-0.5 bg-stone-300 rounded-full appearance-none cursor-pointer relative z-10"
+                    />
                   </div>
-                  <span class="text-[10px] font-black text-orange-600 tabular-nums w-8 text-right">{{ Math.round(onionOpacity * 100) }}%</span>
+                  <span
+                    class="text-[10px] font-black text-orange-600 tabular-nums w-8 text-right"
+                    >{{ Math.round(onionOpacity * 100) }}%</span
+                  >
                 </div>
               </template>
             </CameraInput>
           </div>
         </div>
 
-
         <!-- Result View -->
         <div
           v-else-if="currentView === 'result'"
-          class="flex-1 flex flex-col items-center bg-stone-50 overflow-y-auto no-scrollbar pb-20"
+          class="flex-1 flex flex-col bg-stone-50 overflow-hidden"
         >
-          <div class="w-full flex gap-1 bg-stone-200 h-64 shrink-0 shadow-lg">
-            <div class="flex-1 relative overflow-hidden">
-              <img
-                :src="activeHunt?.image"
-                class="w-full h-full object-cover"
-              />
-              <div
-                class="absolute bottom-3 left-3 bg-black/40 backdrop-blur-md px-2 py-1 rounded text-[8px] text-white font-black uppercase tracking-widest"
-              >
-                Target
+          <!-- Scrollable Content -->
+          <div class="flex-1 overflow-y-auto no-scrollbar pb-48">
+            <!-- Comparison Header -->
+            <div
+              class="w-full flex gap-0.5 bg-stone-200 aspect-[2.5/1] shrink-0 shadow-lg relative z-10"
+            >
+              <div class="flex-1 relative overflow-hidden">
+                <img
+                  :src="activeHunt?.image"
+                  class="w-full h-full object-cover"
+                />
+                <div
+                  class="absolute bottom-2 left-2 bg-black/40 backdrop-blur-md px-1.5 py-0.5 rounded-[4px] text-[7px] text-white font-black uppercase tracking-widest"
+                >
+                  Target
+                </div>
+              </div>
+              <div class="flex-1 relative overflow-hidden">
+                <img
+                  :src="lastAttempt.image"
+                  class="w-full h-full object-cover"
+                />
+                <div
+                  class="absolute bottom-2 left-2 bg-orange-600 px-1.5 py-0.5 rounded-[4px] text-[7px] text-white font-black uppercase tracking-widest"
+                >
+                  Your Shot
+                </div>
               </div>
             </div>
-            <div class="flex-1 relative overflow-hidden">
-              <img
-                :src="lastAttempt.image"
-                class="w-full h-full object-cover"
+
+            <!-- Score Container -->
+            <div class="px-6 pt-6 flex flex-col items-center">
+              <ScoreDisplay
+                :score="lastAttempt.score"
+                :explanation="lastAttempt.explanation"
+                :loading="lastAttempt.loading"
+                :is-success="lastAttempt.isSuccess"
+                :stars-earned="lastAttempt.starsEarned"
+                :xp-earned="lastAttempt.xpEarned"
               />
-              <div
-                class="absolute bottom-3 left-3 bg-orange-600 px-2 py-1 rounded text-[8px] text-white font-black uppercase tracking-widest"
-              >
-                Your Shot
-              </div>
             </div>
           </div>
-          <div class="px-8 pt-10 w-full max-w-sm flex flex-col items-center">
-            <ScoreDisplay
-              :score="lastAttempt.score"
-              :explanation="lastAttempt.explanation"
-              :loading="lastAttempt.loading"
-            />
-            <div v-if="!lastAttempt.loading" class="w-full space-y-4 mt-10">
-              <button
-                @click="currentView = 'match'"
-                class="w-full bg-orange-600 py-5 rounded-[24px] font-black text-white shadow-2xl shadow-orange-600/30 active:scale-95 transition-all flex items-center justify-center gap-3 text-lg"
-              >
-                <RefreshCw class="w-6 h-6" /> Try Again
-              </button>
-              <button
-                @click="currentView = 'home'"
-                class="w-full bg-white border border-stone-200 py-5 rounded-[24px] font-black text-stone-600 hover:bg-stone-50 active:scale-95 transition-all text-lg"
-              >
-                Back to Explorer
-              </button>
-            </div>
+
+          <!-- Fixed Action Buttons -->
+          <div
+            v-if="!lastAttempt.loading"
+            class="absolute bottom-0 inset-x-0 p-6 bg-gradient-to-t from-stone-50 via-stone-50 to-transparent z-20 space-y-3"
+          >
+            <button
+              @click="currentView = lastAttempt.isSuccess ? 'home' : 'match'"
+              :class="[
+                'w-full py-5 rounded-[28px] font-black text-white shadow-2xl transition-all flex items-center justify-center gap-3 text-lg active:scale-95',
+                lastAttempt.isSuccess
+                  ? 'bg-green-600 shadow-green-600/30'
+                  : 'bg-orange-600 shadow-orange-600/30',
+              ]"
+            >
+              <template v-if="lastAttempt.isSuccess">
+                <Check class="w-6 h-6" /> Quest Complete
+              </template>
+              <template v-else>
+                <RefreshCw class="w-6 h-6" /> Retake Image
+              </template>
+            </button>
+            <button
+              @click="currentView = 'home'"
+              class="w-full bg-white border border-stone-200 py-5 rounded-[28px] font-black text-stone-600 hover:bg-stone-50 active:scale-95 transition-all text-lg"
+            >
+              Back to Explorer
+            </button>
           </div>
         </div>
 
@@ -641,22 +1197,24 @@ const centerMap = () => {
             <p
               class="text-orange-600 font-black uppercase tracking-widest text-xs"
             >
-              Locating Mission...
+              Locating Quest...
             </p>
           </div>
 
-          <!-- Step 1: Mission Setup -->
+          <!-- Step 1: Quest Setup -->
           <template v-if="createStep === 'setup'">
-            <ChallengeSetup 
-              v-model="newHuntData" 
+            <ChallengeSetup
+              v-model="newHuntData"
               @capture="createStep = 'capture'"
-              @save="finalizeCreateHunt" 
+              @save="finalizeCreateHunt"
             />
           </template>
 
           <!-- Step 2: Full Screen Capture -->
           <template v-else-if="createStep === 'capture'">
-            <div class="flex-1 flex flex-col bg-stone-50 overflow-hidden touch-none relative">
+            <div
+              class="flex-1 flex flex-col bg-stone-50 overflow-hidden touch-none relative"
+            >
               <CameraInput @capture="handleCapture" :minimal="true" />
             </div>
           </template>

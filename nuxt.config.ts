@@ -2,11 +2,15 @@
 export default defineNuxtConfig({
   compatibilityDate: "2025-07-15",
   devtools: { enabled: false },
+  ssr: false,
   modules: ["@nuxtjs/tailwindcss"],
   runtimeConfig: {
     public: {
       googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY || "",
     },
+  },
+  devServer: {
+    https: true,
   },
   components: [
     { path: "~/components", pathPrefix: false },

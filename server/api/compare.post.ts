@@ -45,7 +45,7 @@ export default defineEventHandler(async (event) => {
     };
 
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.0-flash",
+      model: "gemini-flash-lite-latest",
       generationConfig: {
         responseMimeType: "application/json",
         responseSchema: schema,
