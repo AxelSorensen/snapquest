@@ -9,9 +9,7 @@ export default defineNuxtConfig({
       googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY || "",
     },
   },
-  devServer: {
-    https: true,
-  },
+
   components: [
     { path: "~/components", pathPrefix: false },
     { path: "app/components", pathPrefix: false },

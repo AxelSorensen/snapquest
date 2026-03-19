@@ -25,7 +25,7 @@ import {
   MarkerCluster,
   CustomMarker,
 } from "vue3-google-map";
-import { useLocalStorage, useGeolocation, usePointerSwipe } from "@vueuse/core";
+import { useLocalStorage, useGeolocation } from "@vueuse/core";
 
 const config = useRuntimeConfig();
 const googleMapsApiKey = config.public.googleMapsApiKey;
@@ -42,62 +42,77 @@ const currentView = ref<View>("home");
 
 // Bottom Sheet Snap Logic
 const SHEET_POSITIONS = {
-  FULL: 92,
-  MID: 72,
-  COLLAPSED: 28,
+  FULL: 0,
+  MID: 45,
+  COLLAPSED: 85,
 };
-const sheetHeight = ref(SHEET_POSITIONS.MID);
+const sheetPos = ref(SHEET_POSITIONS.MID);
 const sheetRef = ref<HTMLElement | null>(null);
 const isDraggingSheet = ref(false);
-const dragY = ref(0);
+const startY = ref(0);
+const currentY = ref(0);
 
-const { distanceY, isSwiping } = usePointerSwipe(sheetRef, {
-  threshold: 5,
-  onSwipeStart() {
-    isDraggingSheet.value = true;
-  },
-  onSwipe() {
-    dragY.value = -distanceY.value; // Invert because swipe up is positive distanceY in lib but we want to increase height
-  },
-  onSwipeEnd() {
+const onDragStart = (e: MouseEvent | TouchEvent) => {
+  isDraggingSheet.value = true;
+  startY.value = "touches" in e ? e.touches[0].clientY : e.clientY;
+  currentY.value = startY.value;
+
+  const onDrag = (e: MouseEvent | TouchEvent) => {
+    currentY.value = "touches" in e ? e.touches[0].clientY : e.clientY;
+  };
+
+  const onDragEnd = () => {
     isDraggingSheet.value = false;
-    const currentH =
-      sheetHeight.value + (dragY.value / window.innerHeight) * 100;
-    dragY.value = 0;
+    const deltaY = currentY.value - startY.value;
+    const deltaP = (deltaY / window.innerHeight) * 100;
+    const finalP = sheetPos.value + deltaP;
 
-    // Snap to closest
     const snaps = [
       SHEET_POSITIONS.FULL,
       SHEET_POSITIONS.MID,
       SHEET_POSITIONS.COLLAPSED,
     ];
     const closest = snaps.reduce((prev, curr) =>
-      Math.abs(curr - currentH) < Math.abs(prev - currentH) ? curr : prev,
+      Math.abs(curr - finalP) < Math.abs(prev - finalP) ? curr : prev,
     );
 
-    sheetHeight.value = closest;
+    sheetPos.value = closest;
     if (closest === SHEET_POSITIONS.COLLAPSED) {
       currentView.value = "map";
     } else {
       currentView.value = "home";
     }
-  },
-});
 
-const displayHeight = computed(() => {
+    window.removeEventListener("mousemove", onDrag);
+    window.removeEventListener("mouseup", onDragEnd);
+    window.removeEventListener("touchmove", onDrag);
+    window.removeEventListener("touchend", onDragEnd);
+  };
+
+  window.addEventListener("mousemove", onDrag);
+  window.addEventListener("mouseup", onDragEnd);
+  window.addEventListener("touchmove", onDrag, { passive: false });
+  window.addEventListener("touchend", onDragEnd);
+};
+
+const displayTranslate = computed(() => {
   if (isDraggingSheet.value) {
-    const h = sheetHeight.value + (dragY.value / window.innerHeight) * 100;
+    const deltaY = currentY.value - startY.value;
+    const deltaP = (deltaY / window.innerHeight) * 100;
+    const p = sheetPos.value + deltaP;
     return Math.max(
-      SHEET_POSITIONS.COLLAPSED - 5,
-      Math.min(SHEET_POSITIONS.FULL + 5, h),
+      SHEET_POSITIONS.FULL - 5,
+      Math.min(SHEET_POSITIONS.COLLAPSED + 5, p),
     );
   }
-  return sheetHeight.value;
+  return sheetPos.value;
 });
 
+const isFull = computed(() => displayTranslate.value <= 2);
+
 watch(currentView, (newView) => {
-  if (newView === "home") sheetHeight.value = SHEET_POSITIONS.MID;
-  if (newView === "map") sheetHeight.value = SHEET_POSITIONS.COLLAPSED;
+  if (newView === "home") sheetPos.value = SHEET_POSITIONS.MID;
+  if (newView === "map") sheetPos.value = SHEET_POSITIONS.COLLAPSED;
 });
 
 const customHunts = useLocalStorage<any[]>("lenshunt_custom_hunts", []);
@@ -321,7 +336,7 @@ async function handleCapture(imageData: string) {
 
       // Success criteria: > 75% match AND (distance <= 30m OR GPS unavailable)
       const withinDistance =
-        lastAttempt.distance === null || lastAttempt.distance <= 30;
+        lastAttempt.distance === null || lastAttempt.distance <= 50;
 
       if (lastAttempt.score >= 75 && withinDistance) {
         lastAttempt.isSuccess = true;
@@ -455,7 +470,7 @@ const centerMap = () => {
   >
     <!-- UI Overlay: Top Bar -->
     <div
-      class="absolute top-0 left-0 right-0 p-4 z-20 pointer-events-none flex flex-col space-y-3"
+      class="absolute top-0 left-0 right-0 p-4 z-[1] pointer-events-none flex flex-col space-y-3"
     >
       <div class="flex justify-between items-start">
         <div
@@ -517,7 +532,7 @@ const centerMap = () => {
     </div>
 
     <!-- Main Content Area -->
-    <div class="flex-1 relative z-0">
+    <div class="flex-1 relative">
       <ClientOnly>
         <GoogleMap
           ref="mapRef"
@@ -586,24 +601,34 @@ const centerMap = () => {
 
       <div
         v-if="currentView === 'home' || currentView === 'map'"
-        class="absolute inset-x-0 bottom-0 z-10 pointer-events-none"
+        class="fixed inset-x-0 bottom-0 h-svh z-[200] pointer-events-none"
         :class="{
           'transition-all duration-300 cubic-bezier(0.34, 1.56, 0.64, 1)':
             !isDraggingSheet,
         }"
-        :style="{ height: `${displayHeight}svh` }"
+        :style="{ transform: `translateY(${displayTranslate}%)` }"
       >
         <div
-          class="h-full w-full bg-white rounded-t-[44px] shadow-[0_-12px_50px_rgba(43,26,10,0.12)] border-t border-stone-100 flex flex-col pointer-events-auto overflow-hidden"
+          class="h-full w-full bg-white shadow-[0_-12px_50px_rgba(43,26,10,0.12)] border-t border-stone-100 flex flex-col pointer-events-auto overflow-hidden transition-all duration-300"
+          :class="isFull ? 'rounded-t-0' : 'rounded-t-[44px]'"
         >
           <!-- Home List Header / Drag Handle -->
           <div
-            ref="sheetRef"
-            class="w-full h-12 flex items-center justify-center cursor-grab active:cursor-grabbing hover:bg-stone-50 transition-colors shrink-0 touch-none"
+            @mousedown="onDragStart"
+            @touchstart="onDragStart"
+            class="w-full h-14 flex items-center justify-center cursor-grab active:cursor-grabbing hover:bg-stone-50 transition-colors shrink-0 touch-none relative"
           >
-            <div class="w-14 h-1.5 bg-stone-200 rounded-full"></div>
+            <Transition name="pop" mode="out-in">
+              <div v-if="isFull" key="chevron" class="text-stone-400">
+                <ChevronLeft class="w-6 h-6 -rotate-90" />
+              </div>
+              <div v-else key="bar" class="w-14 h-1.5 bg-stone-200 rounded-full"></div>
+            </Transition>
           </div>
-          <div class="flex-1 overflow-y-auto no-scrollbar px-6 pb-24">
+          <div
+            class="flex-1 no-scrollbar px-6 pb-24"
+            :class="isFull ? 'overflow-y-auto' : 'overflow-y-hidden'"
+          >
             <div class="flex items-center justify-between mb-8 pt-2">
               <div>
                 <h2 class="text-3xl font-black text-stone-900 tracking-tight">
