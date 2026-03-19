@@ -41,78 +41,169 @@ type View =
 const currentView = ref<View>("home");
 
 // Bottom Sheet Snap Logic
-const SHEET_POSITIONS = {
-  FULL: 0,
-  MID: 45,
-  COLLAPSED: 85,
-};
-const sheetPos = ref(SHEET_POSITIONS.MID);
-const sheetRef = ref<HTMLElement | null>(null);
+type SnapState = "peek" | "expanded" | "full";
+const currentSnapState = ref<SnapState>("expanded");
 const isDraggingSheet = ref(false);
-const startY = ref(0);
-const currentY = ref(0);
+const dragY = ref(0);
+const startTouchY = ref(0);
+const startSheetY = ref(0);
+const startTime = ref(0);
+const snapDuration = ref(300);
+
+const getSnapPx = (state: SnapState) => {
+  if (typeof window === "undefined") return 0;
+  const h = window.innerHeight;
+  switch (state) {
+    case "full":
+      return 0;
+    case "expanded":
+      return h * 0.45;
+    case "peek":
+      return h * 0.85;
+    default:
+      return h * 0.85;
+  }
+};
 
 const onDragStart = (e: MouseEvent | TouchEvent) => {
   isDraggingSheet.value = true;
-  startY.value = "touches" in e ? e.touches[0].clientY : e.clientY;
-  currentY.value = startY.value;
+  startTime.value = Date.now();
+  const clientY = "touches" in e ? e.touches[0].clientY : e.clientY;
+  startTouchY.value = clientY;
 
-  const onDrag = (e: MouseEvent | TouchEvent) => {
-    currentY.value = "touches" in e ? e.touches[0].clientY : e.clientY;
-  };
+  // Calculate current Y based on state
+  startSheetY.value = getSnapPx(currentSnapState.value);
+  dragY.value = startSheetY.value;
 
-  const onDragEnd = () => {
-    isDraggingSheet.value = false;
-    const deltaY = currentY.value - startY.value;
-    const deltaP = (deltaY / window.innerHeight) * 100;
-    const finalP = sheetPos.value + deltaP;
-
-    const snaps = [
-      SHEET_POSITIONS.FULL,
-      SHEET_POSITIONS.MID,
-      SHEET_POSITIONS.COLLAPSED,
-    ];
-    const closest = snaps.reduce((prev, curr) =>
-      Math.abs(curr - finalP) < Math.abs(prev - finalP) ? curr : prev,
-    );
-
-    sheetPos.value = closest;
-    if (closest === SHEET_POSITIONS.COLLAPSED) {
-      currentView.value = "map";
-    } else {
-      currentView.value = "home";
-    }
-
-    window.removeEventListener("mousemove", onDrag);
-    window.removeEventListener("mouseup", onDragEnd);
-    window.removeEventListener("touchmove", onDrag);
-    window.removeEventListener("touchend", onDragEnd);
-  };
-
-  window.addEventListener("mousemove", onDrag);
-  window.addEventListener("mouseup", onDragEnd);
-  window.addEventListener("touchmove", onDrag, { passive: false });
+  window.addEventListener("touchmove", onDragMove, { passive: false });
   window.addEventListener("touchend", onDragEnd);
+  window.addEventListener("mousemove", onDragMove);
+  window.addEventListener("mouseup", onDragEnd);
 };
 
-const displayTranslate = computed(() => {
-  if (isDraggingSheet.value) {
-    const deltaY = currentY.value - startY.value;
-    const deltaP = (deltaY / window.innerHeight) * 100;
-    const p = sheetPos.value + deltaP;
-    return Math.max(
-      SHEET_POSITIONS.FULL - 5,
-      Math.min(SHEET_POSITIONS.COLLAPSED + 5, p),
-    );
+const onDragMove = (e: TouchEvent | MouseEvent) => {
+  if (!isDraggingSheet.value) return;
+  const clientY = "touches" in e ? e.touches[0].clientY : e.clientY;
+  const delta = clientY - startTouchY.value;
+  let newY = startSheetY.value + delta;
+
+  // Rubber-banding / Resistance at edges
+  const fullPx = getSnapPx("full");
+  const peekPx = getSnapPx("peek");
+
+  if (newY < fullPx) {
+    newY = fullPx + (newY - fullPx) * 0.15;
+  } else if (newY > peekPx) {
+    newY = peekPx + (newY - peekPx) * 0.15;
   }
-  return sheetPos.value;
+
+  // Final constrain for absolute safety
+  const h = typeof window !== "undefined" ? window.innerHeight : 0;
+  if (newY < -50) newY = -50;
+  if (newY > h + 50) newY = h + 50;
+
+  dragY.value = newY;
+  if ("touches" in e) {
+    if (e.cancelable) e.preventDefault();
+  }
+};
+
+const onDragEnd = (e: TouchEvent | MouseEvent) => {
+  if (!isDraggingSheet.value) return;
+  isDraggingSheet.value = false;
+
+  const duration = Date.now() - startTime.value;
+  const clientY =
+    "changedTouches" in e
+      ? (e as TouchEvent).changedTouches[0].clientY
+      : (e as MouseEvent).clientY;
+  const deltaY = clientY - startTouchY.value;
+  const velocity = deltaY / duration; // px/ms
+
+  const currentY = dragY.value;
+  let targetState = currentSnapState.value;
+
+  // If flicked with enough velocity, jump to next/prev state
+  if (Math.abs(velocity) > 0.5) {
+    if (velocity < 0) {
+      // Swiping UP
+      if (currentSnapState.value === "peek") targetState = "expanded";
+      else if (currentSnapState.value === "expanded") targetState = "full";
+      else targetState = "full";
+    } else {
+      // Swiping DOWN
+      if (currentSnapState.value === "full") targetState = "expanded";
+      else if (currentSnapState.value === "expanded") targetState = "peek";
+      else targetState = "peek";
+    }
+  } else {
+    // Normal distance-based snapping
+    const distances = [
+      { state: "full", dist: Math.abs(currentY - getSnapPx("full")) },
+      { state: "expanded", dist: Math.abs(currentY - getSnapPx("expanded")) },
+      { state: "peek", dist: Math.abs(currentY - getSnapPx("peek")) },
+    ];
+    distances.sort((a, b) => a.dist - b.dist);
+    targetState = distances[0].state as SnapState;
+  }
+
+  // Calculate a natural-feeling duration based on velocity or distance
+  const targetY = getSnapPx(targetState);
+  const distance = Math.abs(currentY - targetY);
+  const calculatedDuration = Math.max(
+    250,
+    Math.min(600, distance / Math.abs(velocity || 0.4)),
+  );
+  snapDuration.value = calculatedDuration;
+
+  currentSnapState.value = targetState;
+  if (targetState === "peek") {
+    currentView.value = "map";
+  } else {
+    currentView.value = "home";
+  }
+
+  window.removeEventListener("touchmove", onDragMove);
+  window.removeEventListener("touchend", onDragEnd);
+  window.removeEventListener("mousemove", onDragMove);
+  window.removeEventListener("mouseup", onDragEnd);
+};
+
+const handleSheetClick = () => {
+  if (isDraggingSheet.value) return;
+  // Toggle between Peek and Expanded on click
+  if (currentSnapState.value === "peek") {
+    currentSnapState.value = "expanded";
+  } else {
+    currentSnapState.value = "peek";
+  }
+  snapDuration.value = 300;
+
+  if (currentSnapState.value === "peek") {
+    currentView.value = "map";
+  } else {
+    currentView.value = "home";
+  }
+};
+
+const displayTranslateY = computed(() => {
+  if (isDraggingSheet.value) {
+    return dragY.value;
+  }
+  return getSnapPx(currentSnapState.value);
 });
 
-const isFull = computed(() => displayTranslate.value <= 2);
+const isFull = computed(() => currentSnapState.value === "full");
 
 watch(currentView, (newView) => {
-  if (newView === "home") sheetPos.value = SHEET_POSITIONS.MID;
-  if (newView === "map") sheetPos.value = SHEET_POSITIONS.COLLAPSED;
+  if (newView === "home" && currentSnapState.value === "peek") {
+    currentSnapState.value = "expanded";
+    snapDuration.value = 300;
+  }
+  if (newView === "map" && currentSnapState.value !== "peek") {
+    currentSnapState.value = "peek";
+    snapDuration.value = 300;
+  }
 });
 
 const customHunts = useLocalStorage<any[]>("lenshunt_custom_hunts", []);
@@ -443,8 +534,11 @@ const centerMap = () => {
     }
 
     // Calculate vertical offset to center user in the visible area above the drawer
-    // Drawer is ~28% or ~72% of height depending on view
-    const drawerHeightRatio = currentView.value === "home" ? 0.72 : 0.28;
+    // peek: covers 15% (85% translate), expanded: covers 55% (45% translate), full: covers 100% (0% translate)
+    let drawerHeightRatio = 0.15; // default for peek
+    if (currentSnapState.value === "expanded") drawerHeightRatio = 0.55;
+    if (currentSnapState.value === "full") drawerHeightRatio = 0.8; // Don't cover completely or we can't see the user
+
     const visibleHeightRatio = 1 - drawerHeightRatio;
 
     // We want the user to be at (visibleHeightRatio / 2) from the top
@@ -601,21 +695,24 @@ const centerMap = () => {
 
       <div
         v-if="currentView === 'home' || currentView === 'map'"
-        class="fixed inset-x-0 bottom-0 h-svh z-[200] pointer-events-none"
-        :class="{
-          'transition-all duration-300 cubic-bezier(0.34, 1.56, 0.64, 1)':
-            !isDraggingSheet,
+        class="fixed inset-x-0 bottom-0 h-svh z-[200] pointer-events-none will-change-transform"
+        :style="{ 
+          transform: `translateY(${displayTranslateY}px) translateZ(0)`,
+          transition: isDraggingSheet ? 'none' : `transform ${snapDuration}ms cubic-bezier(0.16, 1, 0.3, 1)`
         }"
-        :style="{ transform: `translateY(${displayTranslate}%)` }"
       >
         <div
-          class="h-full w-full bg-white shadow-[0_-12px_50px_rgba(43,26,10,0.12)] border-t border-stone-100 flex flex-col pointer-events-auto overflow-hidden transition-all duration-300"
-          :class="isFull ? 'rounded-t-0' : 'rounded-t-[44px]'"
+          class="h-full w-full bg-white shadow-[0_-12px_50px_rgba(43,26,10,0.12)] border-t border-stone-100 flex flex-col pointer-events-auto overflow-hidden"
+          :class="[
+            isFull ? 'rounded-t-0' : 'rounded-t-[44px]',
+            { 'transition-all duration-300': !isDraggingSheet }
+          ]"
         >
           <!-- Home List Header / Drag Handle -->
           <div
             @mousedown="onDragStart"
             @touchstart="onDragStart"
+            @click="handleSheetClick"
             class="w-full h-14 flex items-center justify-center cursor-grab active:cursor-grabbing hover:bg-stone-50 transition-colors shrink-0 touch-none relative"
           >
             <Transition name="pop" mode="out-in">
