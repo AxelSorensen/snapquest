@@ -723,24 +723,24 @@ const centerMap = () => {
             </Transition>
           </div>
           <div
-            class="flex-1 no-scrollbar px-6 pb-24"
+            class="flex-1 no-scrollbar px-6 pb-12"
             :class="isFull ? 'overflow-y-auto' : 'overflow-y-hidden'"
           >
-            <div class="flex items-center justify-between mb-8 pt-2">
+            <div class="flex items-center justify-between mb-6 pt-1">
               <div>
-                <h2 class="text-3xl font-black text-stone-900 tracking-tight">
+                <h2 class="text-2xl font-black text-stone-900 tracking-tight">
                   Nearby Quests
                 </h2>
                 <p
-                  class="text-[10px] uppercase tracking-[0.25em] text-orange-600 font-black"
+                  class="text-[9px] uppercase tracking-[0.25em] text-orange-600 font-black"
                 >
                   {{ hunts.length }} Spots waiting for you
                 </p>
               </div>
               <div
-                class="bg-orange-50 p-3.5 rounded-2xl shadow-inner border border-orange-100"
+                class="bg-orange-50 p-3 rounded-2xl shadow-inner border border-orange-100"
               >
-                <Trophy class="w-6 h-6 text-orange-600" />
+                <Trophy class="w-5 h-5 text-orange-600" />
               </div>
             </div>
             <div v-if="hunts.length > 0" class="grid gap-6">
@@ -797,21 +797,14 @@ const centerMap = () => {
             <!-- Empty State -->
             <div
               v-else
-              class="flex flex-col items-center justify-center py-16 px-4 text-center space-y-8 animate-in fade-in zoom-in-95 duration-300"
+              class="flex flex-col items-center justify-start pt-12 px-4 text-center space-y-6 animate-in fade-in zoom-in-95 duration-300"
             >
-              <div
-                class="w-24 h-24 bg-stone-50 rounded-[40px] flex items-center justify-center border border-stone-100 shadow-inner"
-              >
-                <Search class="w-10 h-10 text-stone-300" />
-              </div>
-
-              <div class="space-y-2">
+              <div class="space-y-1.5">
                 <h3 class="text-xl font-black text-stone-900">
                   No Quests Found
                 </h3>
-                <p class="text-sm text-stone-500 font-medium max-w-[240px]">
-                  There are currently no quests in this area. Why not be the
-                  first to create one?
+                <p class="text-sm text-stone-500 font-medium">
+                  Be the first to create one!
                 </p>
               </div>
 
