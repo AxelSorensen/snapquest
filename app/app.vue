@@ -73,6 +73,7 @@ const xpToNextLevel = computed(() => 500 - (totalXp.value % 500));
 
 const activeHunt = ref<any>(null);
 const detailsSubView = ref<"details" | "location" | "photo">("details");
+const revealedHintsCount = ref(0);
 const profileSubView = ref<"completed" | "posted">("completed");
 const onionOpacity = ref(0.4);
 const isLocating = ref(false);
@@ -182,6 +183,7 @@ function triggerHaptic(pattern: number | number[] = 10) {
 }
 
 function startMatch(hunt: any) {
+  revealedHintsCount.value = 0;
   activeHunt.value = {
     ...hunt,
     difficulty: hunt.difficulty || 3,
@@ -709,14 +711,25 @@ const centerMap = () => {
                 </div>
               </div>
               <div class="space-y-4">
-                <h3
-                  class="text-sm font-black uppercase tracking-[0.1em] text-stone-900"
-                >
-                  Quest Intelligence
-                </h3>
-                <div class="grid gap-3">
+                <div class="flex items-center justify-between">
+                  <h3
+                    class="text-sm font-black uppercase tracking-[0.1em] text-stone-900"
+                  >
+                    Quest Hints
+                  </h3>
+                  <button
+                    v-if="revealedHintsCount < (activeHunt?.tips?.length || 0)"
+                    @click="revealedHintsCount++"
+                    class="text-[10px] font-black uppercase tracking-widest text-orange-600 hover:text-orange-700 transition-colors flex items-center gap-1.5"
+                  >
+                    <Search class="w-3.5 h-3.5" />
+                    Show Hint
+                  </button>
+                </div>
+
+                <div v-if="revealedHintsCount > 0" class="grid gap-3">
                   <div
-                    v-for="(tip, idx) in activeHunt?.tips"
+                    v-for="(tip, idx) in activeHunt?.tips.slice(0, revealedHintsCount)"
                     :key="idx"
                     class="flex gap-4 p-4 bg-white rounded-3xl border border-stone-100 shadow-sm shadow-orange-900/5"
                   >
@@ -731,6 +744,19 @@ const centerMap = () => {
                       {{ tip }}
                     </p>
                   </div>
+                </div>
+                <div
+                  v-else
+                  class="p-8 border-2 border-dashed border-stone-100 rounded-[32px] flex flex-col items-center justify-center gap-3 text-center"
+                >
+                  <div
+                    class="w-12 h-12 rounded-2xl bg-stone-50 flex items-center justify-center text-stone-300"
+                  >
+                    <Info class="w-6 h-6" />
+                  </div>
+                  <p class="text-xs font-bold text-stone-400 max-w-[160px]">
+                    Need help? Reveal hints to help you find the spot.
+                  </p>
                 </div>
               </div>
             </template>
