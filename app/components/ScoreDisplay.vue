@@ -35,7 +35,7 @@ const message = computed(() => {
 </script>
 
 <template>
-  <div class="w-full max-w-sm flex flex-col items-center gap-4 py-6 px-6 rounded-[32px] bg-white border border-stone-100 shadow-xl shadow-orange-900/5 animate-in fade-in zoom-in duration-500">
+  <div class="w-full max-w-sm flex flex-col items-center gap-4 py-6 px-6 rounded-[32px] bg-white border border-stone-100 shadow-xl shadow-orange-900/5 animate-in fade-in zoom-in duration-300">
     <div v-if="loading" class="flex flex-col items-center gap-4 py-6">
       <div class="relative">
         <div class="w-16 h-16 border-[4px] border-orange-100 rounded-full"></div>
@@ -89,15 +89,15 @@ const message = computed(() => {
         </div>
 
         <!-- Success Rewards -->
-        <div v-if="isSuccess" class="flex flex-col items-center gap-3 py-2 animate-in fade-in slide-in-from-bottom-2 duration-700 delay-300 fill-mode-both">
+        <div v-if="isSuccess" class="flex flex-col items-center gap-3 py-2 animate-in fade-in slide-in-from-bottom-2 duration-400 delay-200 fill-mode-both">
           <div class="flex gap-1.5">
             <Star 
               v-for="i in 3" 
               :key="i" 
-              class="w-8 h-8 transition-all duration-500"
+              class="w-8 h-8 transition-all duration-300"
               :class="[
                 i <= starsEarned ? 'text-amber-400 fill-current scale-110' : 'text-stone-100',
-                { 'delay-[400ms]': i === 1, 'delay-[600ms]': i === 2, 'delay-[800ms]': i === 3 }
+                { 'delay-[200ms]': i === 1, 'delay-[300ms]': i === 2, 'delay-[400ms]': i === 3 }
               ]"
             />
           </div>

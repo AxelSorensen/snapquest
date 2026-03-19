@@ -25,7 +25,7 @@ import {
   MarkerCluster,
   CustomMarker,
 } from "vue3-google-map";
-import { useLocalStorage, useGeolocation } from "@vueuse/core";
+import { useLocalStorage, useGeolocation, usePointerSwipe } from "@vueuse/core";
 
 const config = useRuntimeConfig();
 const googleMapsApiKey = config.public.googleMapsApiKey;
@@ -39,6 +39,66 @@ type View =
   | "details"
   | "profile";
 const currentView = ref<View>("home");
+
+// Bottom Sheet Snap Logic
+const SHEET_POSITIONS = {
+  FULL: 92,
+  MID: 72,
+  COLLAPSED: 28,
+};
+const sheetHeight = ref(SHEET_POSITIONS.MID);
+const sheetRef = ref<HTMLElement | null>(null);
+const isDraggingSheet = ref(false);
+const dragY = ref(0);
+
+const { distanceY, isSwiping } = usePointerSwipe(sheetRef, {
+  threshold: 5,
+  onSwipeStart() {
+    isDraggingSheet.value = true;
+  },
+  onSwipe() {
+    dragY.value = -distanceY.value; // Invert because swipe up is positive distanceY in lib but we want to increase height
+  },
+  onSwipeEnd() {
+    isDraggingSheet.value = false;
+    const currentH =
+      sheetHeight.value + (dragY.value / window.innerHeight) * 100;
+    dragY.value = 0;
+
+    // Snap to closest
+    const snaps = [
+      SHEET_POSITIONS.FULL,
+      SHEET_POSITIONS.MID,
+      SHEET_POSITIONS.COLLAPSED,
+    ];
+    const closest = snaps.reduce((prev, curr) =>
+      Math.abs(curr - currentH) < Math.abs(prev - currentH) ? curr : prev,
+    );
+
+    sheetHeight.value = closest;
+    if (closest === SHEET_POSITIONS.COLLAPSED) {
+      currentView.value = "map";
+    } else {
+      currentView.value = "home";
+    }
+  },
+});
+
+const displayHeight = computed(() => {
+  if (isDraggingSheet.value) {
+    const h = sheetHeight.value + (dragY.value / window.innerHeight) * 100;
+    return Math.max(
+      SHEET_POSITIONS.COLLAPSED - 5,
+      Math.min(SHEET_POSITIONS.FULL + 5, h),
+    );
+  }
+  return sheetHeight.value;
+});
+
+watch(currentView, (newView) => {
+  if (newView === "home") sheetHeight.value = SHEET_POSITIONS.MID;
+  if (newView === "map") sheetHeight.value = SHEET_POSITIONS.COLLAPSED;
+});
 
 const customHunts = useLocalStorage<any[]>("lenshunt_custom_hunts", []);
 const completedHunts = useLocalStorage<string[]>(
@@ -69,14 +129,45 @@ const hunts = computed(() => {
 const totalXp = useLocalStorage("lenshunt_total_xp", 0);
 const totalStars = useLocalStorage("lenshunt_total_stars", 0);
 const explorerLevel = computed(() => Math.floor(totalXp.value / 500) + 1);
+const explorerRank = computed(() => {
+  const lvl = explorerLevel.value;
+  if (lvl >= 50) return "Legendary Scout";
+  if (lvl >= 20) return "Master Hunter";
+  if (lvl >= 10) return "Elite Tracker";
+  if (lvl >= 5) return "Veteran Explorer";
+  if (lvl >= 2) return "Pro Scout";
+  return "Rookie Explorer";
+});
 const xpToNextLevel = computed(() => 500 - (totalXp.value % 500));
 
 const activeHunt = ref<any>(null);
 const detailsSubView = ref<"details" | "location" | "photo">("details");
 const revealedHintsCount = ref(0);
+const currentHintCost = computed(() => getHintCost(revealedHintsCount.value));
+
+function getHintCost(idx: number) {
+  // Base cost decreases with level (max 40% discount at level 20+)
+  const baseBase = 50;
+  const levelDiscount = Math.min(0.4, (explorerLevel.value - 1) * 0.02);
+  const baseCost = Math.round(baseBase * (1 - levelDiscount));
+  return baseCost * Math.pow(2, idx);
+}
 const profileSubView = ref<"completed" | "posted">("completed");
 const onionOpacity = ref(0.4);
 const isLocating = ref(false);
+
+watch(activeHunt, () => {
+  revealedHintsCount.value = 0;
+});
+
+function revealHint() {
+  if (revealedHintsCount.value < (activeHunt.value?.tips?.length || 0)) {
+    const cost = currentHintCost.value;
+    totalXp.value = Math.max(0, totalXp.value - cost);
+    revealedHintsCount.value++;
+    triggerHaptic(10);
+  }
+}
 
 function getDistance(
   p1: { lat: number; lng: number },
@@ -183,15 +274,11 @@ function triggerHaptic(pattern: number | number[] = 10) {
 }
 
 function startMatch(hunt: any) {
-  revealedHintsCount.value = 0;
   activeHunt.value = {
     ...hunt,
     difficulty: hunt.difficulty || 3,
     solves: hunt.solves || Math.floor(Math.random() * 100),
-    tips: hunt.tips || [
-      "Match the horizontal horizon line",
-      "Look for distinct landmarks",
-    ],
+    tips: hunt.tips,
   };
   detailsSubView.value = "details";
   currentView.value = "details";
@@ -232,9 +319,9 @@ async function handleCapture(imageData: string) {
       lastAttempt.score = (data as any).score;
       lastAttempt.explanation = (data as any).explanation;
 
-      // Success criteria: > 75% match AND (distance <= 10m OR GPS unavailable)
+      // Success criteria: > 75% match AND (distance <= 30m OR GPS unavailable)
       const withinDistance =
-        lastAttempt.distance === null || lastAttempt.distance <= 10;
+        lastAttempt.distance === null || lastAttempt.distance <= 30;
 
       if (lastAttempt.score >= 75 && withinDistance) {
         lastAttempt.isSuccess = true;
@@ -279,10 +366,7 @@ function finalizeCreateHunt() {
   const userTips =
     newHuntData.value.tips.length > 0
       ? newHuntData.value.tips.map((t) => t.text)
-      : [
-          "Identify the primary structural lines",
-          "Check for foreground alignment",
-        ];
+      : null;
 
   const newHunt = {
     id: Date.now().toString(),
@@ -393,7 +477,7 @@ const centerMap = () => {
               <p
                 class="text-[8px] uppercase tracking-[0.2em] text-stone-400 font-black"
               >
-                Level {{ explorerLevel }} Explorer
+                Level {{ explorerLevel }} • {{ explorerRank }}
               </p>
             </div>
             <div class="w-full h-1 bg-stone-100 rounded-full overflow-hidden">
@@ -502,16 +586,20 @@ const centerMap = () => {
 
       <div
         v-if="currentView === 'home' || currentView === 'map'"
-        class="absolute inset-x-0 bottom-0 z-10 transition-all duration-500 cubic-bezier(0.16, 1, 0.3, 1) pointer-events-none"
-        :class="currentView === 'home' ? 'h-[72svh]' : 'h-[28svh]'"
+        class="absolute inset-x-0 bottom-0 z-10 pointer-events-none"
+        :class="{
+          'transition-all duration-300 cubic-bezier(0.34, 1.56, 0.64, 1)':
+            !isDraggingSheet,
+        }"
+        :style="{ height: `${displayHeight}svh` }"
       >
         <div
           class="h-full w-full bg-white rounded-t-[44px] shadow-[0_-12px_50px_rgba(43,26,10,0.12)] border-t border-stone-100 flex flex-col pointer-events-auto overflow-hidden"
         >
-          <!-- Home List Header -->
+          <!-- Home List Header / Drag Handle -->
           <div
-            class="w-full h-10 flex items-center justify-center cursor-pointer active:bg-stone-50 transition-colors"
-            @click="currentView = currentView === 'home' ? 'map' : 'home'"
+            ref="sheetRef"
+            class="w-full h-12 flex items-center justify-center cursor-grab active:cursor-grabbing hover:bg-stone-50 transition-colors shrink-0 touch-none"
           >
             <div class="w-14 h-1.5 bg-stone-200 rounded-full"></div>
           </div>
@@ -519,7 +607,7 @@ const centerMap = () => {
             <div class="flex items-center justify-between mb-8 pt-2">
               <div>
                 <h2 class="text-3xl font-black text-stone-900 tracking-tight">
-                  Active Quests
+                  Nearby Quests
                 </h2>
                 <p
                   class="text-[10px] uppercase tracking-[0.25em] text-orange-600 font-black"
@@ -533,7 +621,7 @@ const centerMap = () => {
                 <Trophy class="w-6 h-6 text-orange-600" />
               </div>
             </div>
-            <div class="grid gap-6">
+            <div v-if="hunts.length > 0" class="grid gap-6">
               <div
                 v-for="hunt in hunts"
                 :key="hunt.id"
@@ -582,6 +670,36 @@ const centerMap = () => {
                   </div>
                 </div>
               </div>
+            </div>
+
+            <!-- Empty State -->
+            <div
+              v-else
+              class="flex flex-col items-center justify-center py-16 px-4 text-center space-y-8 animate-in fade-in zoom-in-95 duration-300"
+            >
+              <div
+                class="w-24 h-24 bg-stone-50 rounded-[40px] flex items-center justify-center border border-stone-100 shadow-inner"
+              >
+                <Search class="w-10 h-10 text-stone-300" />
+              </div>
+
+              <div class="space-y-2">
+                <h3 class="text-xl font-black text-stone-900">
+                  No Quests Found
+                </h3>
+                <p class="text-sm text-stone-500 font-medium max-w-[240px]">
+                  There are currently no quests in this area. Why not be the
+                  first to create one?
+                </p>
+              </div>
+
+              <button
+                @click="currentView = 'create'"
+                class="bg-orange-600 text-white px-8 py-4 rounded-3xl font-black text-sm uppercase tracking-widest shadow-lg shadow-orange-600/30 hover:bg-orange-700 active:scale-95 transition-all flex items-center gap-3"
+              >
+                <Plus class="w-5 h-5" />
+                Create New Quest
+              </button>
             </div>
           </div>
         </div>
@@ -711,51 +829,88 @@ const centerMap = () => {
                 </div>
               </div>
               <div class="space-y-4">
-                <div class="flex items-center justify-between">
-                  <h3
-                    class="text-sm font-black uppercase tracking-[0.1em] text-stone-900"
-                  >
-                    Quest Hints
-                  </h3>
-                  <button
-                    v-if="revealedHintsCount < (activeHunt?.tips?.length || 0)"
-                    @click="revealedHintsCount++"
-                    class="text-[10px] font-black uppercase tracking-widest text-orange-600 hover:text-orange-700 transition-colors flex items-center gap-1.5"
-                  >
-                    <Search class="w-3.5 h-3.5" />
-                    Show Hint
-                  </button>
-                </div>
+                <h3
+                  class="text-sm font-black uppercase tracking-[0.1em] text-stone-900"
+                >
+                  Quest Hints
+                </h3>
 
-                <div v-if="revealedHintsCount > 0" class="grid gap-3">
+                <div v-if="activeHunt?.tips?.length > 0" class="grid gap-3">
                   <div
-                    v-for="(tip, idx) in activeHunt?.tips.slice(0, revealedHintsCount)"
+                    v-for="(tip, idx) in activeHunt?.tips"
                     :key="idx"
-                    class="flex gap-4 p-4 bg-white rounded-3xl border border-stone-100 shadow-sm shadow-orange-900/5"
+                    class="relative group transition-all duration-300"
                   >
+                    <!-- Revealed Hint -->
                     <div
-                      class="w-6 h-6 rounded-full bg-orange-50 flex items-center justify-center text-orange-600 font-black text-[10px] shrink-0"
+                      v-if="idx < revealedHintsCount"
+                      class="flex gap-4 p-4 bg-white rounded-3xl border border-stone-100 shadow-sm shadow-orange-900/5 animate-in fade-in zoom-in-95 duration-300 ease-out"
                     >
-                      {{ idx + 1 }}
+                      <div
+                        class="w-6 h-6 rounded-full bg-orange-50 flex items-center justify-center text-orange-600 font-black text-[10px] shrink-0"
+                      >
+                        {{ idx + 1 }}
+                      </div>
+                      <p
+                        class="text-sm text-stone-600 font-medium leading-relaxed"
+                      >
+                        {{ tip }}
+                      </p>
                     </div>
-                    <p
-                      class="text-sm text-stone-600 font-medium leading-relaxed"
+
+                    <!-- Next to Reveal -->
+                    <button
+                      v-else-if="idx === revealedHintsCount"
+                      @click="revealHint"
+                      class="w-full flex items-center justify-between gap-4 p-4 bg-orange-50/30 rounded-3xl border-2 border-dashed border-orange-200 hover:border-orange-400 hover:bg-orange-50/50 hover:scale-[1.01] active:scale-[0.98] transition-all duration-200 group"
                     >
-                      {{ tip }}
-                    </p>
+                      <div class="flex items-center gap-4">
+                        <div
+                          class="w-6 h-6 rounded-full bg-orange-100 flex items-center justify-center text-orange-600"
+                        >
+                          <Search class="w-3.5 h-3.5" />
+                        </div>
+                        <span class="text-sm font-bold text-orange-800"
+                          >Show Hint {{ idx + 1 }}</span
+                        >
+                      </div>
+                      <span class="text-[10px] font-black text-orange-600"
+                        >-{{ getHintCost(idx) }} XP</span
+                      >
+                    </button>
+
+                    <!-- Locked Hint -->
+                    <div
+                      v-else
+                      class="flex items-center justify-between gap-4 p-4 bg-stone-50 rounded-3xl border border-stone-100 opacity-50 grayscale"
+                    >
+                      <div class="flex items-center gap-4">
+                        <div
+                          class="w-6 h-6 rounded-full bg-stone-100 flex items-center justify-center text-stone-400"
+                        >
+                          <X class="w-3 h-3" />
+                        </div>
+                        <span class="text-sm font-bold text-stone-400"
+                          >Locked Hint</span
+                        >
+                      </div>
+                      <span class="text-[10px] font-black text-stone-400"
+                        >-{{ getHintCost(idx) }} XP</span
+                      >
+                    </div>
                   </div>
                 </div>
                 <div
                   v-else
-                  class="p-8 border-2 border-dashed border-stone-100 rounded-[32px] flex flex-col items-center justify-center gap-3 text-center"
+                  class="p-4 border-2 border-dashed border-stone-100 rounded-[32px] flex flex-col items-center justify-center gap-3 text-center"
                 >
                   <div
                     class="w-12 h-12 rounded-2xl bg-stone-50 flex items-center justify-center text-stone-300"
                   >
                     <Info class="w-6 h-6" />
                   </div>
-                  <p class="text-xs font-bold text-stone-400 max-w-[160px]">
-                    Need help? Reveal hints to help you find the spot.
+                  <p class="text-xs font-bold text-stone-400">
+                    No hints for this quest
                   </p>
                 </div>
               </div>
@@ -883,7 +1038,7 @@ const centerMap = () => {
               </div>
               <div class="space-y-1">
                 <h2 class="text-2xl font-black text-stone-900 tracking-tight">
-                  Master Explorer
+                  {{ explorerRank }}
                 </h2>
                 <p
                   class="text-stone-400 font-black text-[10px] uppercase tracking-[0.25em]"
@@ -1278,11 +1433,52 @@ body {
   scrollbar-width: none;
 }
 .animate-in {
-  animation: slide-up 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: slide-up 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
-@keyframes slide-up {
+.fade-in {
+  animation: fade-in 0.3s ease-out forwards;
+}
+.zoom-in {
+  animation: zoom-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+.zoom-in-95 {
+  animation: zoom-in-95 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+.slide-in-from-bottom-2 {
+  animation: slide-in-from-bottom-2 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)
+    forwards;
+}
+@keyframes fade-in {
   from {
-    transform: translateY(30px);
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes zoom-in {
+  from {
+    transform: scale(0.8);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@keyframes zoom-in-95 {
+  from {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@keyframes slide-in-from-bottom-2 {
+  from {
+    transform: translateY(16px);
     opacity: 0;
   }
   to {
@@ -1290,18 +1486,28 @@ body {
     opacity: 1;
   }
 }
+@keyframes slide-up {
+  from {
+    transform: translateY(40px) scale(0.96);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
 .slide-fade-enter-active {
-  transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 .slide-fade-leave-active {
-  transition: all 0.4s cubic-bezier(1, 0.5, 0.8, 1);
+  transition: all 0.15s cubic-bezier(0.4, 0, 1, 1);
 }
 .slide-fade-enter-from {
-  transform: translateY(40px);
+  transform: translateY(60px) scale(0.95);
   opacity: 0;
 }
 .slide-fade-leave-to {
-  transform: translateY(-40px);
+  transform: translateY(20px) scale(0.98);
   opacity: 0;
 }
 .pop-enter-active {
