@@ -3,6 +3,7 @@
 A photo-scavenger-hunt game: get an AI-generated quest, snap a matching photo, and score points on a map.
 
 ![SnapQuest screenshot](docs/screenshot.png)
+*Screenshot taken without a `GOOGLE_MAPS_API_KEY` configured, so the map area above "Nearby Quests" renders blank — this is a missing-config gap, not a bug.*
 
 ## Features
 
@@ -35,6 +36,13 @@ Then open the printed local URL (dev server runs with `--host` for testing on ot
 - [Google Generative AI](https://ai.google.dev/)
 - [vue3-google-map](https://github.com/diegoazh/vue3-google-map)
 - [Tailwind CSS](https://tailwindcss.com/)
+
+## Environment variables
+
+Copy `.env.example` to `.env` and fill in the values before running the app:
+
+- `GOOGLE_MAPS_API_KEY` — required to render the map; without it the map area renders blank (see screenshot note below).
+- `GEMINI_API_KEY` — required for `/api/compare` to score a submitted quest photo against the target.
 
 ## Status
 
