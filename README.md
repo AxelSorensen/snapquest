@@ -37,3 +37,5 @@ Then open the printed local URL (dev server runs with `--host` for testing on ot
 ## Status
 
 🚧 Actively developed prototype — core flow (create → camera match → map/result) is in place; UI layout and styling still being refined as of the latest commits.
+
+⚠️ Runs, but requires your own Google Maps and Gemini API keys — verified `pnpm install && pnpm run build` succeeds without them as of 2026-09-03; the `/api/compare` route (Gemini-based image comparison) wasn't exercised against a live key.
