@@ -2,6 +2,8 @@
 
 A photo-scavenger-hunt game: get an AI-generated quest, snap a matching photo, and score points on a map.
 
+![SnapQuest screenshot](docs/screenshot.png)
+
 ## Features
 
 - 🎯 **AI quest generation** — quests generated via Google's Generative AI (Gemini)
